@@ -1,29 +1,252 @@
-# Object files
-*.o
-*.ko
-*.obj
-*.elf
+#include "mainhead.h"
+#include "TrafficMode.h"
+#include "LeaveEvents.h"
 
-# Precompiled Headers
-*.gch
-*.pch
+#define TURE 1
+#define FALSE 0
+#define ARRIVING 1
+#define LEAVING 0
+#define NOEVENT -1 
 
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
+void randomsource(int &sourceNode);
+///////函数名称：randomsource
+///////函数功能：该函数用于随机产生源数据发送请求
+///////传入参数：source[M]用于存储源节点, n为源节点个数   
+void randomdestination(const int &sourceNode,int &receiverNode);
+///////函数名称：randomdestination
+///////函数功能：该函数用于随机产生目的接收节点
+///////传入参数：dest[M]用于存储目的节点,n为节点个数
+bool SourceDestPath(int sourceNode,int receiverNode,int topo[][N],int wave[N][N],int &WaveofWorkPath,int &NumofBlock,
+					int WorkPath[MAXSERVICE][N],int IDofService);
+bool PathofService(int source,int dest,int topo[][N],int wave[][N],int path[N],int n_m[1]);
+///////////////////////////////////////////////////////////////////////
+void Resource_Allocation(int path[N],int wave[N][N],int length);
+///////////////////////////////////////////////////////////////////////
+///////函数名称：Resource_Allocation分配网络资源
+void Resource_Release(int wave[N][N],int &WaveofWorkPath,int WorkPath[][N],int IDofService);
+///////////////////////////////////////////////////////////////////////
+///////函数名称：Resource_Release释放网络资源
+///////函数功能：释放业务连接所占据的网络带宽资源
+void Arriving_Event(int sourceNode,int receiverNode,int topo[N][N],int wave[N][N],int &WaveofWorkPath,int &NumofBlock,
+					int WorkPath[][N],int IDofService);
+///////////////////////////////////////////////////////////////////////
+void Leaving_Event(int topo[N][N],int wave[N][N],int &WaveofWorkPath,int WorkPath[][N],int IDofService);
+///////////////////////////////////////////////////////////////////////
+int Stop_Alarm_On=FALSE;
+int Leave_Event_Over=TURE;
 
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
+int Arrival_Counter=0;   ///定义请求到达数目
+int Leave_Counter=0;     ///定义请求离开数目
+int Block_Counter=0;     ///定义请求阻塞数目
+int Block_CounterSH=0;
+float Simulation_Clock=0.0;//存储仿真持续的时间
+float Arrival_interval;  ///定义两业务请求到达时间间隔（用伯松分布实现）
+float Service_Time; ///定义业务持续时间
+float TimeofCurrentArrivalEvent=0.0;///当前到达事件的时间(simulation_clock+Arrival_interval) 
+float TimeofCurrentDepartEvent=0.0;//当前到达事件的离开时间(TimeofCurrentArrivalEvent+Service_Time)
+LeaveEvents Leave_Event;     ///定义一个对象  实现离开事件表的相关功能
 
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
+FILE *fp_1=fopen("test.txt","w");
+FILE *fp_2=fopen("result.txt","w");
+
+int main()
+{
+	int i,j;
+	int topo[N][N];
+	int link_sum=0;
+	////读取邻接表文件到数组
+	if (f_read_file1(topo)==0) 
+	{
+		printf("文件打开失败!\n");
+		return 0;
+	}
+	////显示邻接数组
+	// 	printf("\n/*****************网络的带权临接矩阵如下：***************************/\n");
+	for (i=0;i<N;i++)
+	{  
+		// 		printf("\n");
+		for (j=0;j<N;j++)
+		{
+			// 			printf("%d ",topo[i][j]);
+			if (topo[i][j]!=INF) link_sum++;
+		}
+	}
+	link_sum=link_sum/2;
+	printf("链路数总和为：%d \n",link_sum);
+	
+	int wave[N][N];
+	int wave_sum=0;
+	////读取资源表文件到数组
+	if (f_read_file2(wave)==0) 
+	{
+		printf("文件打开失败!\n");
+		return 0;
+	}
+	////显示邻接数组
+	wave_sum=0;
+	// 	printf("\n/*****************网络的可用资源表如下：******************************/\n");
+	// 	printf("\n网络的可用资源如下：");
+	for (i=0;i<N;i++)
+	{  
+		//		 		printf("\n");
+		for (j=0;j<N;j++)
+		{
+			//			 			printf("%d ",wave[i][j]);
+			if (wave[i][j]!=INF) wave_sum=wave_sum+16;
+		}
+	}
+	printf("波长可用数总和为：%d \n",wave_sum);
+	
+	unsigned Next_Event;      ///确定下次到达事件的类型（LEAVING ARRIVING 两种方式）
+	srand((unsigned)time(NULL));
+	//类定义、参数初始化、队列清空
+	TrafficMode gNewCallTraffic;
+	gNewCallTraffic.SetPara(Arrival_rate);
+	Leave_Event.ClearQueue();
+
+	////得到第一个到达事件的相关参数，并建立离开事件链表
+	Arrival_interval=(float)gNewCallTraffic.ArrivelTimeFunc();///确定第一个到达事件的时间间隔  
+//	printf("%f\n",Arrival_interval);//测试到达时间的随机性
+	TimeofCurrentArrivalEvent=Simulation_Clock+Arrival_interval;///产生第一个达到事件的时间点
+	Service_Time=(float)gNewCallTraffic.StopTimeFunc();///确定第一个到达事件的持续时间
+//	printf("%f\n",Service_Time);//测试持续时间的随机性
+	TimeofCurrentDepartEvent=TimeofCurrentArrivalEvent+Service_Time;///得到第一个到达事件离开的时间点
+	Arrival_Counter=0;   //加入业务连接数循环
+	QNodePtr NewNode=(QNodePtr)malloc(sizeof(QNode));
+	NewNode->time=TimeofCurrentDepartEvent;
+	NewNode->ID=Arrival_Counter;//标识所属事件编号
+	NewNode->next=NULL;
+	Leave_Event.EnQueue(NewNode);
+	
+	//	Leave_Event.printQueue();
+	//	printf("%f\n",TimeofCurrentArrivalEvent);
+	//	printf("%f\n",TimeofCurrentDepartEvent);
+	//	fprintf(fp_1,"%f \n",TimeofCurrentArrivalEvent);
+	
+    //记录各个业务请求的工作通路，以便在请求时间到达后回收相应的资源	
+	int WorkPath[MAXSERVICE][N];
+	for (i=0;i<MAXSERVICE;i++)
+	{
+		for (j=0;j<N;j++)
+		{
+			WorkPath[i][j]=999;
+		}
+	}
+/*	int WaveDP[N][N];//用以存储共享保护的波长使用数量
+	for (i=0;i<N;i++)
+	{
+		for (j=0;j<N;j++)
+		{
+			WaveDP[i][j]=0;
+		}
+	}
+	*/
+	  int WaveofWorkPath=0;//工作通路上使用的波长资源数量	
+
+	while(TimeofCurrentArrivalEvent!=0)//仿真持续至网络接收所有的业务请求
+	{ 	
+		if(!Leave_Event.EmptyQueue())
+		{
+			QNode HeadNode=Leave_Event.GetHead();
+			//测试时间大小的比较
+//			printf("\n离开事件的时间：%d",HeadNode.ID);
+			fprintf(fp_1,"\n离开事件的时间：%f",HeadNode.time);
+//			printf("\n到达事件的时间：%f\n",TimeofCurrentArrivalEvent);
+			fprintf(fp_1,"\n到达事件的时间：%f",TimeofCurrentArrivalEvent);
+			if(HeadNode.time < TimeofCurrentArrivalEvent)//离开事件早于到达事件，先处理离开事件
+			{
+				fprintf(fp_1,"\n离开事件早于到达事件");
+				Next_Event=LEAVING;
+				Simulation_Clock=HeadNode.time;
+			}
+			else if(HeadNode.time > TimeofCurrentArrivalEvent)//到达事件早于离开事件，先处理到达事件
+			{
+				fprintf(fp_1,"\n到达事件早于离开事件");
+				Next_Event=ARRIVING;
+				Simulation_Clock=TimeofCurrentArrivalEvent;
+			}
+			else//两者同时到达时，系统判定：先处理离开事件
+			{
+				Next_Event=LEAVING;
+				Simulation_Clock=HeadNode.time;
+			}				
+		}
+		else{
+				Next_Event=ARRIVING;
+		}
+		switch(Next_Event)
+		{
+	    	case ARRIVING:
+			{
+				/*--------在确定下一事件为到达事件后，动态产生业务请求的源、目的节点以及带宽请求---------*/
+				int sourceNode;
+				int receiverNode;			
+				randomsource(sourceNode);
+				randomdestination(sourceNode,receiverNode);
+//				printf("%d   %d\n",sourceNode,receiverNode);
+				/*-----------------------------------业务处理模块------------------------------------*/
+				//业务到达，处理操作包括：路由、分配资源，若网络没有接收该业务，则从离开事件队列中删除业务对应的节点
+				int IDofService=Arrival_Counter;
+//				printf("ID号为%4d的业务请求到达，配置资源!\n",IDofService);
+
+				Arriving_Event(sourceNode,receiverNode,topo,wave,WaveofWorkPath,Block_Counter,WorkPath,IDofService);
+				/*------------------------------产生新到达的业务-------------------------------------*/
+				if (Arrival_Counter <40-1)//Arrival_Counter从0开始计数
+				{
+					Arrival_interval=(float)gNewCallTraffic.ArrivelTimeFunc(); 
+//					printf("----------------%f\n",Arrival_interval);
+					TimeofCurrentArrivalEvent=Simulation_Clock+Arrival_interval;
+					Service_Time=(float)gNewCallTraffic.StopTimeFunc();
+					printf("----------------%f\n",Service_Time);
+					TimeofCurrentDepartEvent=TimeofCurrentArrivalEvent+Service_Time;
+					Arrival_Counter++;   //加入业务连接数循环
+					QNodePtr NewNode=(QNodePtr)malloc(sizeof(QNode));
+					NewNode->time=TimeofCurrentDepartEvent;
+					NewNode->ID=Arrival_Counter;//标识所属事件编号
+					NewNode->next=NULL;
+					Leave_Event.EnQueue(NewNode);
+//					Leave_Event.printQueue();
+//					printf("%f\n",TimeofCurrentArrivalEvent);
+//	                printf("%f\n",TimeofCurrentDepartEvent);
+				}else{//产生了所需的业务量，改变状态量使仿真结束
+					TimeofCurrentArrivalEvent=0;
+				}
+				break;
+			}
+    		case LEAVING:
+			{
+				QNode DepartNode=Leave_Event.GetHead();
+				int IDofService=DepartNode.ID;
+				//业务拆除，处理操作包括：释放资源、在队列中删除相应离开事件节点
+//				printf("ID号为%4d的业务请求执行完毕，释放资源!\n",IDofService);
+				Leaving_Event(topo,wave,WaveofWorkPath,WorkPath,IDofService);
+				/*----------------------------删除离开事件队列中的节点---------------------------*/
+				Leave_Event.DeleQueue();
+//				Leave_Event.printQueue();
+				Leave_Counter++;
+				break;
+			}
+	    	case NOEVENT:
+			break;	
+		}
+	}
+//	Leave_Event.printQueue();
+	for (i=0;i<N;i++)
+	{
+		for (j=0;j<N;j++)
+		{
+			fprintf(fp_2,"%4d",wave[i][j]);
+		}
+		fprintf(fp_2,"\n");
+	}
+	fprintf(fp_2,"\n");
+	printf("仿真结束时网络资源使用数量为：%d\n",WaveofWorkPath);
+
+	printf("阻塞的业务请求数为：%d\n",Block_Counter);
+	fprintf(fp_1,"\n释放的业务请求数为：%d\n",Leave_Counter); 
+	printf("业务请求数量为：%d\n",Arrival_Counter);
+	fclose(fp_1);
+	fclose(fp_2);
+	system("pause");
+	return 0;
+}
